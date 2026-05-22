@@ -17,18 +17,16 @@ export function cleanDescription(desc: string): string {
 
 // Group transactions and identify recurring patterns
 export function analyzeRecurringExpenses(transactions: Transaction[]): RecurringExpense[] {
-  // We only look at expenses for recurring outgoing payments
-  const expenses = transactions.filter((t) => t.type === "expense");
-  if (expenses.length < 2) return [];
+  if (transactions.length < 2) return [];
 
   // Group by cleaned description
   const groups: Record<string, Transaction[]> = {};
-  for (const exp of expenses) {
-    const key = cleanDescription(exp.description);
+  for (const t of transactions) {
+    const key = cleanDescription(t.description);
     if (!groups[key]) {
       groups[key] = [];
     }
-    groups[key].push(exp);
+    groups[key].push(t);
   }
 
   const recurring: RecurringExpense[] = [];
@@ -51,7 +49,7 @@ export function analyzeRecurringExpenses(transactions: Transaction[]): Recurring
 
     const averageInterval = intervals.reduce((sum, val) => sum + val, 0) / intervals.length;
 
-    // Standard deviation / similarity evaluation for intervals to identify frequency
+    // Standard intervals in days evaluation
     let frequency: "monthly" | "weekly" | "yearly" | "bi-weekly" = "monthly";
     let isRecurring = false;
     let confidence = 0;
@@ -73,7 +71,7 @@ export function analyzeRecurringExpenses(transactions: Transaction[]): Recurring
       isRecurring = true;
       confidence = 95;
     } else {
-      // If intervals are a bit noisy but amounts are very close, it might are monthly bills on slightly varying dates
+      // If intervals are a bit noisy but amounts are very close, consider it recurring
       const amounts = list.map((t) => t.amount);
       const minAmount = Math.min(...amounts);
       const maxAmount = Math.max(...amounts);
@@ -114,6 +112,7 @@ export function analyzeRecurringExpenses(transactions: Transaction[]): Recurring
         nextEstimatedDate: nextDate.toISOString().split("T")[0],
         confidence,
         status: "active",
+        type: lastTx.type,
       });
     }
   }
@@ -126,7 +125,6 @@ export function getMonthlySpending(transactions: Transaction[]): TrendData[] {
   const map: Record<string, TrendData> = {};
 
   for (const tx of transactions) {
-    // Get year-month: YYYY-MM
     const dateObj = new Date(tx.date);
     if (isNaN(dateObj.getTime())) continue;
     const monthKey = tx.date.substring(0, 7); // "YYYY-MM"
@@ -148,29 +146,80 @@ export function getMonthlySpending(transactions: Transaction[]): TrendData[] {
     }
   }
 
-  // Convert to sorted array
   return Object.values(map).sort((a, b) => a.month.localeCompare(b.month));
 }
 
-// Generate future financial trends forecasting
+// Auxiliary checker to find whether a subscription hits a future date based on calendar metrics
+export function checkRecurringHit(rec: RecurringExpense, D: Date): boolean {
+  if (!rec.lastDate) return false;
+  const last = new Date(rec.lastDate);
+  if (isNaN(last.getTime())) return false;
+
+  // Align days exactly on UTC level for pure date offsets
+  const lastUTC = Date.UTC(last.getFullYear(), last.getMonth(), last.getDate());
+  const curUTC = Date.UTC(D.getFullYear(), D.getMonth(), D.getDate());
+  const diffDays = Math.round((curUTC - lastUTC) / (1000 * 60 * 60 * 24));
+
+  if (diffDays <= 0) return false;
+
+  if (rec.frequency === "weekly") {
+    return diffDays % 7 === 0;
+  }
+
+  if (rec.frequency === "bi-weekly") {
+    return diffDays % 14 === 0;
+  }
+
+  if (rec.frequency === "monthly") {
+    const targetDay = last.getDate();
+    const curDay = D.getDate();
+    const maxDaysInM = new Date(D.getFullYear(), D.getMonth() + 1, 0).getDate();
+
+    if (curDay === targetDay) return true;
+    if (targetDay > maxDaysInM && curDay === maxDaysInM) return true;
+    return false;
+  }
+
+  if (rec.frequency === "yearly") {
+    const targetM = last.getMonth();
+    const targetDay = last.getDate();
+
+    if (D.getMonth() === targetM) {
+      const curDay = D.getDate();
+      const maxDaysInM = new Date(D.getFullYear(), D.getMonth() + 1, 0).getDate();
+      if (curDay === targetDay) return true;
+      if (targetDay > maxDaysInM && curDay === maxDaysInM) return true;
+    }
+    return false;
+  }
+
+  return false;
+}
+
+// Generate future financial trends forecasting with daily granularity and event markers
 export function generateFinancialForecast(
   transactions: Transaction[],
   recurringExpenses: RecurringExpense[],
   monthsCount: number = 6
 ): ForecastPoint[] {
-  const monthlyData = getMonthlySpending(transactions);
-  if (monthlyData.length === 0) {
+  const sortedTxs = [...transactions]
+    .filter((t) => t.date && !isNaN(new Date(t.date).getTime()))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (sortedTxs.length === 0) {
     return [];
   }
 
-  // Let's compute average monthly non-recurring expense & normal income
-  // Let's say all income is consistent, find the average monthly income
-  const totalIncome = monthlyData.reduce((sum, d) => sum + d.totalIncome, 0);
-  const avgMonthlyIncome = totalIncome / monthlyData.length;
+  const earliestDateObj = new Date(sortedTxs[0].date);
+  const latestDateObj = new Date(sortedTxs[sortedTxs.length - 1].date);
 
-  // Find non-recurring expenses:
-  const recurringTotalAmount = recurringExpenses
-    .filter((r) => r.status === "active")
+  // Compile standard aggregated monthly parameters for trend slopes & average friction
+  const monthlyData = getMonthlySpending(transactions);
+  const activeRecurring = recurringExpenses.filter((r) => r.status === "active");
+
+  // Sum standard active recurring expenses to pull out high-tier bills
+  const recurringTotalAmount = activeRecurring
+    .filter((r) => r.type !== "income")
     .reduce((sum, r) => {
       let multiplier = 1;
       if (r.frequency === "weekly") multiplier = 4.33;
@@ -179,7 +228,7 @@ export function generateFinancialForecast(
       return sum + r.averageAmount * multiplier;
     }, 0);
 
-  // Compute average monthly standard expenses (non-recurring)
+  // Non-recurring historical spend profiles
   const nonRecurringMonthlyExpenses = monthlyData.map((data) => {
     return Math.max(0, data.totalExpense - recurringTotalAmount);
   });
@@ -187,8 +236,10 @@ export function generateFinancialForecast(
     nonRecurringMonthlyExpenses.reduce((sum, val) => sum + val, 0) /
     (nonRecurringMonthlyExpenses.length || 1);
 
-  // Calculate trends pattern using standard linear regression (y = mx + b)
-  // for overall non-recurring expenses over time
+  // Daily baseline flat spending spent on things like small coffees, etc.
+  const dailyNonRecurringExpense = avgNonRecurringExpense / 30.4;
+
+  // Standard Linear regression slope computation
   const n = monthlyData.length;
   let slope = 0;
   if (n > 1) {
@@ -203,62 +254,106 @@ export function generateFinancialForecast(
     if (denom !== 0) {
       slope = (n * sumXY - sumX * sumY) / denom;
     }
-    // Cap slope to prevent extreme run-away line projections (e.g. ±20% of average)
     const maxSlope = avgNonRecurringExpense * 0.1;
     slope = Math.max(-maxSlope, Math.min(maxSlope, slope));
   }
 
-  // Generate historical data points
-  const points: ForecastPoint[] = [];
+  const dailySlopeAdjust = slope / (30.4 * 30.4);
 
-  // Start building historical balance (running baseline)
-  let runningBalance = 2500; // Arbitrary healthy initial balance baseline
+  // Step 1: Accumulate actual historical balances at daily granularity
+  const historyPoints: ForecastPoint[] = [];
+  let runningBalance = 2500; // Realistic start balance baseline
 
-  for (let i = 0; i < monthlyData.length; i++) {
-    const data = monthlyData[i];
-    runningBalance += data.totalIncome - data.totalExpense;
-    points.push({
-      date: data.month,
-      projectedExpense: Math.round(data.totalExpense * 100) / 100,
-      projectedIncome: Math.round(data.totalIncome * 100) / 100,
+  // Swift map of dates to items lists
+  const txMap: Record<string, Transaction[]> = {};
+  for (const t of sortedTxs) {
+    if (!txMap[t.date]) txMap[t.date] = [];
+    txMap[t.date].push(t);
+  }
+
+  const daysHistoryDiff = Math.ceil((latestDateObj.getTime() - earliestDateObj.getTime()) / (1000 * 60 * 60 * 24));
+
+  for (let i = 0; i <= daysHistoryDiff; i++) {
+    const curDate = new Date(earliestDateObj);
+    curDate.setDate(curDate.getDate() + i);
+    const dateStr = curDate.toISOString().split("T")[0];
+
+    let dayExpense = 0;
+    let dayIncome = 0;
+
+    const dayTxs = txMap[dateStr] || [];
+    for (const tx of dayTxs) {
+      if (tx.type === "expense") {
+        dayExpense += tx.amount;
+      } else {
+        dayIncome += tx.amount;
+      }
+    }
+
+    runningBalance += (dayIncome - dayExpense);
+
+    historyPoints.push({
+      date: dateStr,
+      projectedExpense: Math.round(dayExpense * 100) / 100,
+      projectedIncome: Math.round(dayIncome * 100) / 100,
       projectedBalance: Math.round(runningBalance * 100) / 100,
       isForecast: false,
     });
   }
 
-  // Project future months
-  const lastMonthStr = monthlyData[monthlyData.length - 1].month;
-  let [lastYear, lastMonth] = lastMonthStr.split("-").map(Number);
+  // Step 2: Project future days with exact recurring occurrences
+  const futurePoints: ForecastPoint[] = [];
+  const totalProjDays = monthsCount * 30;
 
-  for (let step = 1; step <= monthsCount; step++) {
-    // Increment month
-    lastMonth++;
-    if (lastMonth > 12) {
-      lastMonth = 1;
-      lastYear++;
+  for (let d = 1; d <= totalProjDays; d++) {
+    const curProjDate = new Date(latestDateObj);
+    curProjDate.setDate(curProjDate.getDate() + d);
+    const dateStr = curProjDate.toISOString().split("T")[0];
+
+    // Everyday small expenses (gradually adapted by macro regression slope)
+    const everydaySpent = Math.max(0, dailyNonRecurringExpense + dailySlopeAdjust * d);
+
+    let dayExpense = everydaySpent;
+    let dayIncome = 0;
+
+    // Evaluate recurring occurrences
+    let hitName: string | undefined = undefined;
+    let hitAmt: number | undefined = undefined;
+    let hitType: "income" | "expense" | undefined = undefined;
+    let hitColor: string | undefined = undefined;
+
+    for (const rec of activeRecurring) {
+      if (checkRecurringHit(rec, curProjDate)) {
+        if (rec.type === "income") {
+          dayIncome += rec.averageAmount;
+          hitName = rec.descriptionPattern;
+          hitAmt = rec.averageAmount;
+          hitType = "income";
+          hitColor = "#10b981";
+        } else {
+          dayExpense += rec.averageAmount;
+          hitName = rec.descriptionPattern;
+          hitAmt = rec.averageAmount;
+          hitType = "expense";
+          hitColor = "#ef4444";
+        }
+      }
     }
-    const nextMonthStr = `${lastYear}-${String(lastMonth).padStart(2, "0")}`;
 
-    // Compute expected scale of non-recurring expense using regression trend
-    const predictedNonRecurring = Math.max(0, avgNonRecurringExpense + slope * (n - 1 + step));
+    runningBalance += (dayIncome - dayExpense);
 
-    // Future monthly expense is: predicted non-recurring + standard recurring subscription total
-    const projectedExp = predictedNonRecurring + recurringTotalAmount;
-    const projectedInc = avgMonthlyIncome;
-
-    runningBalance += projectedInc - projectedExp;
-
-    points.push({
-      date: nextMonthStr,
-      projectedExpense: Math.round(projectedExp * 100) / 100,
-      projectedIncome: Math.round(projectedInc * 100) / 100,
+    futurePoints.push({
+      date: dateStr,
+      projectedExpense: Math.round(dayExpense * 100) / 100,
+      projectedIncome: Math.round(dayIncome * 100) / 100,
       projectedBalance: Math.round(runningBalance * 100) / 100,
       isForecast: true,
-      notes: step === 1 
-        ? `Based on trend direction (${slope >= 0 ? "+" : ""}${Math.round(slope)}/mo) & recurring subscriptions`
-        : undefined,
+      recurringExpenseName: hitName,
+      recurringExpenseAmount: hitAmt,
+      recurringExpenseType: hitType,
+      recurringExpenseColor: hitColor,
     });
   }
 
-  return points;
+  return [...historyPoints, ...futurePoints];
 }

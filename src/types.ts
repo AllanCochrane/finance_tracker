@@ -27,6 +27,7 @@ export interface RecurringExpense {
   nextEstimatedDate: string;
   confidence: number; // percentage similarity
   status: "active" | "inactive";
+  type?: "expense" | "income";
 }
 
 export interface TrendData {
@@ -43,6 +44,10 @@ export interface ForecastPoint {
   projectedBalance: number;
   isForecast: boolean;
   notes?: string;
+  recurringExpenseName?: string;
+  recurringExpenseAmount?: number;
+  recurringExpenseType?: "income" | "expense";
+  recurringExpenseColor?: string;
 }
 
 export const DEFAULT_CATEGORIES: Category[] = [

@@ -69,15 +69,9 @@ const DEMO_TRANSACTIONS: Transaction[] = [
 
 export default function App() {
   // Application local states
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem("forecast_transactions");
-    return saved ? JSON.parse(saved) : DEMO_TRANSACTIONS;
-  });
-
-  const [categories, setCategories] = useState<Category[]>(() => {
-    const saved = localStorage.getItem("forecast_categories");
-    return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
-  });
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const [forecastMonths, setForecastMonths] = useState<number>(6);
   const [selectedMonth, setSelectedMonth] = useState<string>("2026-05");
@@ -99,15 +93,174 @@ export default function App() {
     category: "Groceries",
   });
   const [showAddForm, setShowAddForm] = useState(false);
+  const [hoveredPt, setHoveredPt] = useState<any | null>(null);
 
-  // Sync to localStorage
-  useEffect(() => {
-    localStorage.setItem("forecast_transactions", JSON.stringify(transactions));
-  }, [transactions]);
+  // Fetch all databases routine
+  const fetchAllData = async () => {
+    try {
+      setIsLoading(true);
+      const [txRes, catRes] = await Promise.all([
+        fetch("/api/transactions").then((r) => r.json()),
+        fetch("/api/categories").then((r) => r.json()),
+      ]);
+      if (txRes.transactions) {
+        setTransactions(txRes.transactions);
+      }
+      if (catRes.categories) {
+        setCategories(catRes.categories);
+      }
+    } catch (err) {
+      console.error("Failed to load records from SQLite db: ", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
+  // Sync to database on mount
   useEffect(() => {
-    localStorage.setItem("forecast_categories", JSON.stringify(categories));
-  }, [categories]);
+    fetchAllData();
+  }, []);
+
+  // Add transactional elements
+  const handleAddManualTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amtParsed = parseFloat(newTx.amount);
+    if (isNaN(amtParsed) || amtParsed <= 0) return;
+
+    const added: Transaction = {
+      id: `man-${Math.random().toString(36).substr(2, 9)}`,
+      date: newTx.date,
+      description: newTx.description.trim() || "Manual Transaction",
+      amount: amtParsed,
+      type: newTx.type,
+      category: newTx.type === "income" ? "Income" : newTx.category,
+      source: "manual",
+    };
+
+    try {
+      const res = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(added),
+      });
+      if (res.ok) {
+        setTransactions((prev) => [added, ...prev]);
+      }
+    } catch (err) {
+      console.error("Failed to save transaction to database:", err);
+    }
+
+    setNewTx({
+      date: new Date().toISOString().split("T")[0],
+      description: "",
+      amount: "",
+      type: "expense",
+      category: "Groceries",
+    });
+    setShowAddForm(false);
+  };
+
+  const handleRemoveTransaction = async (id: string) => {
+    if (confirm("Are you sure you want to delete this transaction record?")) {
+      try {
+        const res = await fetch(`/api/transactions/${id}`, {
+          method: "DELETE",
+        });
+        if (res.ok) {
+          setTransactions((prev) => prev.filter((t) => t.id !== id));
+        }
+      } catch (err) {
+        console.error("Failed to delete transaction from database:", err);
+      }
+    }
+  };
+
+  const handleUpdateTransactionCategory = async (id: string, newCatName: string) => {
+    try {
+      const res = await fetch(`/api/transactions/${id}/category`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category: newCatName }),
+      });
+      if (res.ok) {
+        setTransactions((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, category: newCatName } : t))
+        );
+      }
+    } catch (err) {
+      console.error("Failed to update transaction category in database:", err);
+    }
+  };
+
+  const handleAddCategory = async (name: string, color: string) => {
+    const newCat: Category = {
+      id: `cat-${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      color,
+    };
+    try {
+      const res = await fetch("/api/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newCat),
+      });
+      if (res.ok) {
+        setCategories((prev) => [...prev, newCat]);
+      }
+    } catch (err) {
+      console.error("Failed to save new category in database:", err);
+    }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    const target = categories.find((c) => c.id === id);
+    if (!target) return;
+    try {
+      const res = await fetch(`/api/categories/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setCategories((prev) => prev.filter((c) => c.id !== id));
+        // update transactions under deleted category to "Other"
+        setTransactions((prev) =>
+          prev.map((t) => (t.category === target.name ? { ...t, category: "Other" } : t))
+        );
+      }
+    } catch (err) {
+      console.error("Failed to remove category from database:", err);
+    }
+  };
+
+  const handleResetToDemo = async () => {
+    if (confirm("Are you sure you want to revert all records back to the demo showcase dataset?")) {
+      try {
+        const res = await fetch("/api/reset", {
+          method: "POST",
+        });
+        if (res.ok) {
+          await fetchAllData();
+          setSelectedMonth("2026-05");
+        }
+      } catch (err) {
+        console.error("Failed to reset database:", err);
+      }
+    }
+  };
+
+  const handleBulkImport = async (newItems: Transaction[]) => {
+    try {
+      const res = await fetch("/api/transactions/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transactions: newItems }),
+      });
+      if (res.ok) {
+        setTransactions((prev) => [...newItems, ...prev]);
+      }
+    } catch (err) {
+      console.error("Failed to bulk save parsed statement records:", err);
+    }
+  };
 
   // Derived calculations: Auto identify monthly trends
   const recurringExpenses = useMemo(() => {
@@ -126,7 +279,7 @@ export default function App() {
   const availableMonths = useMemo(() => {
     const monthsSet = new Set<string>();
     transactions.forEach((t) => {
-      if (t.date.length >= 7) {
+      if (t.date && t.date.length >= 7) {
         monthsSet.add(t.date.substring(0, 7));
       }
     });
@@ -158,78 +311,6 @@ export default function App() {
       };
     }).sort((a, b) => b.value - a.value);
   }, [selectedMonthData, categories]);
-
-  // Add transactional elements
-  const handleAddManualTransaction = (e: React.FormEvent) => {
-    e.preventDefault();
-    const amtParsed = parseFloat(newTx.amount);
-    if (isNaN(amtParsed) || amtParsed <= 0) return;
-
-    const added: Transaction = {
-      id: `man-${Math.random().toString(36).substr(2, 9)}`,
-      date: newTx.date,
-      description: newTx.description.trim() || "Manual Transaction",
-      amount: amtParsed,
-      type: newTx.type,
-      category: newTx.type === "income" ? "Income" : newTx.category,
-      source: "manual",
-    };
-
-    setTransactions((prev) => [added, ...prev]);
-    setNewTx({
-      date: new Date().toISOString().split("T")[0],
-      description: "",
-      amount: "",
-      type: "expense",
-      category: "Groceries",
-    });
-    setShowAddForm(false);
-  };
-
-  const handleRemoveTransaction = (id: string) => {
-    if (confirm("Are you sure you want to delete this transaction record?")) {
-      setTransactions((prev) => prev.filter((t) => t.id !== id));
-    }
-  };
-
-  const handleUpdateTransactionCategory = (id: string, newCatName: string) => {
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, category: newCatName } : t))
-    );
-  };
-
-  const handleAddCategory = (name: string, color: string) => {
-    const newCat: Category = {
-      id: `cat-${Math.random().toString(36).substr(2, 9)}`,
-      name,
-      color,
-    };
-    setCategories((prev) => [...prev, newCat]);
-  };
-
-  const handleDeleteCategory = (id: string) => {
-    const target = categories.find((c) => c.id === id);
-    if (!target) return;
-    setCategories((prev) => prev.filter((c) => c.id !== id));
-    // update transactions under deleted category to "Other"
-    setTransactions((prev) =>
-      prev.map((t) => (t.category === target.name ? { ...t, category: "Other" } : t))
-    );
-  };
-
-  const handleResetToDemo = () => {
-    if (confirm("Are you sure you want to revert all records back to the demo showcase dataset?")) {
-      setTransactions(DEMO_TRANSACTIONS);
-      setCategories(DEFAULT_CATEGORIES);
-      setSelectedMonth("2026-05");
-      localStorage.removeItem("forecast_transactions");
-      localStorage.removeItem("forecast_categories");
-    }
-  };
-
-  const handleBulkImport = (newItems: Transaction[]) => {
-    setTransactions((prev) => [...newItems, ...prev]);
-  };
 
   // Filtered transactions for the ledger table list
   const filteredTransactionsList = useMemo(() => {
@@ -277,7 +358,7 @@ export default function App() {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="p-1 px-2 rounded-md bg-emerald-50 text-emerald-700 text-xs font-mono font-semibold tracking-wider uppercase">
-                Offline Local Data
+                SQLite DB Persistent
               </span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
               <span className="text-xs text-gray-400 font-mono">UTC: 2026-05-22</span>
@@ -286,7 +367,7 @@ export default function App() {
               Financial Expense Tracker & Forecaster
             </h1>
             <p className="text-sm text-gray-500 font-sans leading-relaxed">
-              Import electronic CSV files or bank statement PDFs. Extrapolate future spending trends and identify recurring subscriptions automatically.
+              Import electronic CSV files or bank statement PDFs. Extrapolate future spending trends and identify recurring subscriptions automatically, backed by unified SQLite database storage.
             </p>
           </div>
 
@@ -540,11 +621,11 @@ export default function App() {
               ) : (
                 <div className="space-y-4">
                   {/* Beautiful SVG Sparkline showing historic & forecast timeline */}
-                  <div className="relative h-56 w-full border border-gray-50 rounded-xl bg-gray-50/30 p-2 overflow-hidden">
+                  <div className="relative h-64 w-full border border-gray-50 rounded-xl bg-gray-50/30 p-2 overflow-visible">
                     
                     {/* SVG Container plotting historic dots vs projected dashes */}
                     <svg className="w-full h-full" overflow="visible">
-                      <g transform="translate(0, 10)">
+                      <g transform="translate(0, 15)">
                         {/* Build visual paths and coordinates dynamically */}
                         {(() => {
                           const width = 580; // normalized svg scale base
@@ -641,9 +722,9 @@ export default function App() {
                                 d={expensePath}
                                 fill="none"
                                 stroke="#f87171"
-                                strokeWidth="2.5"
+                                strokeWidth="2"
                                 strokeDasharray="3 3"
-                                className="opacity-70"
+                                className="opacity-50"
                               />
 
                               {/* Draw Liquid Assets Running Balance Curve (Emerald Green theme) */}
@@ -654,24 +735,90 @@ export default function App() {
                                 strokeWidth="3"
                               />
 
-                              {/* Interactive Nodes or End Indicator Nodes */}
+                              {/* Standard Markers: Start, Split/Pivot, End */}
                               {forecastData.map((pt, idx) => {
                                 const x = (idx / (forecastData.length - 1)) * 100;
-                                if (idx === 0 || idx === forecastData.length - 1 || pt.isForecast) {
+                                const isStart = idx === 0;
+                                const isEnd = idx === forecastData.length - 1;
+                                const splitIndex = forecastData.findIndex(p => p.isForecast);
+                                const isSplit = idx === splitIndex;
+
+                                if (isStart || isEnd || isSplit) {
                                   return (
-                                    <g key={idx}>
+                                    <g key={`standard-${idx}`}>
                                       <circle
                                         cx={`${x}%`}
                                         cy={getY(pt.projectedBalance)}
-                                        r={pt.isForecast ? "4.5" : "3.5"}
+                                        r="4.5"
                                         fill={pt.isForecast ? "#059669" : "#10b981"}
                                         stroke="#ffffff"
                                         strokeWidth="1.5"
+                                        className="cursor-pointer hover:scale-125 transition-transform"
+                                        onMouseEnter={() => setHoveredPt({ ...pt, idx })}
+                                        onMouseLeave={() => setHoveredPt(null)}
                                       />
                                     </g>
                                   );
                                 }
                                 return null;
+                              })}
+
+                              {/* Identified Recurring Milestones on the trend curve */}
+                              {forecastData.map((pt, idx) => {
+                                if (!pt.recurringExpenseName) return null;
+                                const x = (idx / (forecastData.length - 1)) * 100;
+                                const y = getY(pt.projectedBalance);
+                                const color = pt.recurringExpenseType === "income" ? "#10b981" : "#ef4444";
+
+                                return (
+                                  <g key={`rec-marker-${idx}`}>
+                                    {/* Dotted helper drop lines */}
+                                    <line
+                                      x1={`${x}%`}
+                                      y1={y}
+                                      x2={`${x}%`}
+                                      y2={height}
+                                      stroke={color}
+                                      strokeWidth="1"
+                                      strokeDasharray="2 2"
+                                      className="opacity-40"
+                                    />
+                                    {/* Halos ring */}
+                                    <circle
+                                      cx={`${x}%`}
+                                      cy={y}
+                                      r="6"
+                                      fill="none"
+                                      stroke={color}
+                                      strokeWidth="1"
+                                      className="animate-pulse opacity-60"
+                                    />
+                                    {/* Core circle */}
+                                    <circle
+                                      cx={`${x}%`}
+                                      cy={y}
+                                      r="4"
+                                      fill={color}
+                                      stroke="#ffffff"
+                                      strokeWidth="1.5"
+                                      className="cursor-pointer hover:scale-125 transition-transform"
+                                      onMouseEnter={() => setHoveredPt({ ...pt, idx })}
+                                      onMouseLeave={() => setHoveredPt(null)}
+                                    />
+                                    {/* Floating micro indicators labels */}
+                                    <text
+                                      x={`${x}%`}
+                                      y={y - 12}
+                                      textAnchor="middle"
+                                      fill={pt.recurringExpenseType === "income" ? "#065f46" : "#b91c1c"}
+                                      fontSize="8"
+                                      fontWeight="bold"
+                                      className="pointer-events-none select-none fill-current font-mono"
+                                    >
+                                      {pt.recurringExpenseName.split(" ")[0].substring(0, 8)}
+                                    </text>
+                                  </g>
+                                );
                               })}
                             </>
                           );
@@ -682,9 +829,68 @@ export default function App() {
                     {/* Timeline X-Axis display coordinates tags */}
                     <div className="absolute bottom-1 left-2 right-2 flex justify-between text-[10px] font-mono text-gray-400 font-semibold">
                       <span>{forecastData[0]?.date}</span>
-                      <span className="text-emerald-600 font-bold bg-emerald-50 px-1 rounded">Estimated Future Balance Line</span>
+                      <span className="text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                        Interactive Balance Trend (Hover for Details)
+                      </span>
                       <span>{forecastData[forecastData.length - 1]?.date}</span>
                     </div>
+
+                    {/* Highly responsive hover popup card */}
+                    {hoveredPt && (() => {
+                      // Inline calculation of y corresponding to target balance
+                      const allBalances = forecastData.map(p => p.projectedBalance);
+                      const allExpenses = forecastData.map(p => p.projectedExpense);
+                      const minVal = Math.min(...allBalances, ...allExpenses, 0);
+                      const maxVal = Math.max(...allBalances, 1000) * 1.05;
+                      const valRange = maxVal - minVal;
+                      const yRatio = (hoveredPt.projectedBalance - minVal) / (valRange || 1);
+                      const yPos = 180 - yRatio * 180;
+
+                      return (
+                        <div
+                          className="absolute z-20 p-2.5 bg-gray-900 border border-gray-800 rounded-xl shadow-xl text-left pointer-events-none animate-fade-in text-white space-y-1 scale-95 origin-bottom"
+                          style={{
+                            left: `${(hoveredPt.idx / (forecastData.length - 1)) * 95}%`,
+                            top: `${Math.max(15, Math.min(145, yPos - 12))}px`,
+                            transform: 'translate(-50%, -100%)',
+                          }}
+                        >
+                          <div className="flex items-center gap-1.5 justify-between">
+                            <span className="text-[9px] font-mono font-bold text-gray-400">
+                              {hoveredPt.date}
+                            </span>
+                            <span className={`px-1 rounded text-[8px] font-bold ${
+                              hoveredPt.isForecast ? "bg-emerald-950 text-emerald-400" : "bg-gray-800 text-gray-300"
+                            }`}>
+                              {hoveredPt.isForecast ? "Projected" : "Historical"}
+                            </span>
+                          </div>
+
+                          <div className="text-xs font-bold font-mono">
+                            Balance: <span className="text-emerald-400">${hoveredPt.projectedBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
+                          </div>
+
+                          {hoveredPt.recurringExpenseName ? (
+                            <div className="pt-1 mt-1 border-t border-gray-850 text-[10px] space-y-0.5 max-w-[170px]">
+                              <div className="flex items-center gap-1 font-semibold text-emerald-300">
+                                <span className={`w-1.5 h-1.5 rounded-full ${hoveredPt.recurringExpenseType === "income" ? "bg-emerald-400" : "bg-rose-400"}`} />
+                                <span className="truncate max-w-[130px]" title={hoveredPt.recurringExpenseName}>
+                                  {hoveredPt.recurringExpenseName}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-gray-300 font-mono">
+                                Amount: {hoveredPt.recurringExpenseType === "income" ? "+" : "-"}${hoveredPt.recurringExpenseAmount.toFixed(2)}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="pt-0.5 text-[9px] text-gray-400 font-mono">
+                              No key bills scheduled today
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Summary analysis report footer details */}
@@ -692,7 +898,24 @@ export default function App() {
                     <div className="space-y-1">
                       <span className="text-gray-400 font-semibold font-sans uppercase">Expected Monthly Income baseline</span>
                       <p className="text-sm font-bold text-gray-900 font-sans">
-                        ${(forecastData.find(p => p.isForecast)?.projectedIncome || 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}/month
+                        ${(() => {
+                          const activeRecurringIncome = recurringExpenses
+                            .filter((r) => r.status === "active" && r.type === "income")
+                            .reduce((sum, r) => {
+                              let multiplier = 1;
+                              if (r.frequency === "weekly") multiplier = 4.33;
+                              else if (r.frequency === "bi-weekly") multiplier = 2.16;
+                              else if (r.frequency === "yearly") multiplier = 1 / 12;
+                              return sum + r.averageAmount * multiplier;
+                            }, 0);
+                          
+                          const monthlySpending = getMonthlySpending(transactions);
+                          const backupAvgIncome = transactions
+                            .filter(t => t.type === 'income')
+                            .reduce((sum, t) => sum + t.amount, 0) / (monthlySpending.length || 1);
+
+                          return Math.round(activeRecurringIncome || backupAvgIncome || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
+                        })()}/month
                       </p>
                       <p className="text-[10px] text-gray-400 font-sans">Calculated via regular historical paycheck deposits</p>
                     </div>
