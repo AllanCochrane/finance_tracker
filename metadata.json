@@ -1,0 +1,6 @@
+{
+  "name": "Expense Tracker and Forecaster",
+  "description": "Chart monthly spending, import CSVs, parse PDF bank statements with Gemini AI, identify repeating expenses, and accurately forecast future financial trends.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
