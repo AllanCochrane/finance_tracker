@@ -25,7 +25,7 @@ async function startServer() {
   dbInit();
 
   const app = express();
-  const PORT = parseInt(process.env.CUSTOM_PORT || "3000", 10);
+  const PORT = process.env.APP_URL?.includes('.run.app') ? 3000 : parseInt(process.env.CUSTOM_PORT || "3000", 10);
 
   // Set limits to handle large bank statement PDF base64 payloads
   app.use(express.json({ limit: "20mb" }));
@@ -99,6 +99,9 @@ async function startServer() {
 
   app.get("/api/auth/me", (req, res) => {
     try {
+      if (process.env.DISABLE_AUTH === "true") {
+        return res.json({ user: { name: "Local Dev", email: "dev@localhost" } });
+      }
       const token = req.cookies.auth_session;
       if (!token) return res.json({ user: null });
       const decoded = jwt.decode(token);
