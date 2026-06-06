@@ -228,16 +228,19 @@ export default function App() {
   };
 
   const handleUpdateTransactionCategory = async (id: string, newCatName: string) => {
+    // Optimistic UI Update to ensure the dropdown doesn't blank or revert while waiting
+    setTransactions((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, category: newCatName } : t))
+    );
+
     try {
-      const res = await fetch(`/api/transactions/${id}/category`, {
+      const res = await fetch(`/api/transactions/${encodeURIComponent(id)}/category`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ category: newCatName }),
       });
-      if (res.ok) {
-        setTransactions((prev) =>
-          prev.map((t) => (t.id === id ? { ...t, category: newCatName } : t))
-        );
+      if (!res.ok) {
+        console.error("Failed to update category, status:", res.status);
       }
     } catch (err) {
       console.error("Failed to update transaction category in database:", err);
