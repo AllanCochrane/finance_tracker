@@ -2,11 +2,11 @@ FROM node:22-slim AS builder
 
 WORKDIR /app
 
-# Install dependencies (including devDependencies for building)
+# Install dependencies 
 COPY package*.json ./
-# Native modules like better-sqlite3 may require python/make if pre-built binaries are not available for the host platform.
-# We install standard build tools just in case.
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+# Pre-built binaries are usually available for native modules like better-sqlite3 on standard platforms.
+# If you encounter build errors on unusual architectures, you may need to uncomment the following line:
+# RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 RUN npm ci
 
 # Copy the rest of the application source code
