@@ -95,6 +95,9 @@ export default function App() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [hoveredPt, setHoveredPt] = useState<any | null>(null);
 
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
   // Fetch all databases routine
   const fetchAllData = async () => {
     try {
@@ -119,7 +122,56 @@ export default function App() {
   // Sync to database on mount
   useEffect(() => {
     fetchAllData();
+    fetchUser();
+    
+    // Listen for OAuth messages from the popup
+    const handleMessage = (event: MessageEvent) => {
+      // Validate origin is from AI Studio preview or localhost
+      const origin = event.origin;
+      if (!origin.endsWith('.run.app') && !origin.includes('localhost') && !origin.includes('0.0.0.0')) {
+        return;
+      }
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        setCurrentUser(event.data.user);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
   }, []);
+
+  const fetchUser = async () => {
+    try {
+      const res = await fetch("/api/auth/me");
+      const data = await res.json();
+      setCurrentUser(data.user);
+    } catch (err) {
+      console.error("Failed to fetch user", err);
+    }
+  };
+
+  const handleLogin = async () => {
+    try {
+      const redirectUri = window.location.origin + "/auth/callback";
+      const response = await fetch(`/api/auth/url?redirect_uri=${encodeURIComponent(redirectUri)}`);
+      if (!response.ok) throw new Error('Failed to get auth URL');
+      const { url } = await response.json();
+      const authWindow = window.open(url, 'oauth_popup', 'width=600,height=700');
+      if (!authWindow) {
+        alert('Please allow popups for this site to connect your account.');
+      }
+    } catch (err) {
+      console.error('OAuth error:', err);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: "POST" });
+      setCurrentUser(null);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   // Add transactional elements
   const handleAddManualTransaction = async (e: React.FormEvent) => {
@@ -373,6 +425,31 @@ export default function App() {
 
           {/* Action buttons */}
           <div className="flex flex-wrap items-center gap-3">
+            {currentUser ? (
+              <div className="flex items-center gap-3 bg-white px-3 py-1.5 border border-gray-200 rounded-xl shadow-sm">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold text-xs">
+                    {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
+                  </div>
+                  <span className="text-xs font-semibold text-gray-700 font-sans">{currentUser.name || currentUser.email || 'User'}</span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded-md hover:bg-red-50 transition"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleLogin}
+                className="px-4 py-2 bg-white border border-gray-200 text-xs font-semibold rounded-xl text-gray-700 hover:text-gray-900 shadow-sm hover:bg-gray-50 transition flex items-center gap-2 cursor-pointer font-sans"
+              >
+                <div className="w-4 h-4 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-[10px] font-bold">G</div>
+                Connect Google
+              </button>
+            )}
+
             <button
               id="revert-demo-btn"
               onClick={handleResetToDemo}
@@ -749,13 +826,20 @@ export default function App() {
                                       <circle
                                         cx={`${x}%`}
                                         cy={getY(pt.projectedBalance)}
-                                        r="4.5"
+                                        r="15"
+                                        fill="transparent"
+                                        className="cursor-pointer outline-none"
+                                        onMouseEnter={() => setHoveredPt({ ...pt, idx })}
+                                        onMouseLeave={() => setHoveredPt(null)}
+                                      />
+                                      <circle
+                                        cx={`${x}%`}
+                                        cy={getY(pt.projectedBalance)}
+                                        r={hoveredPt?.idx === idx ? 6 : 4.5}
                                         fill={pt.isForecast ? "#059669" : "#10b981"}
                                         stroke="#ffffff"
                                         strokeWidth="1.5"
-                                        className="cursor-pointer hover:scale-125 transition-transform"
-                                        onMouseEnter={() => setHoveredPt({ ...pt, idx })}
-                                        onMouseLeave={() => setHoveredPt(null)}
+                                        className="pointer-events-none transition-all duration-200"
                                       />
                                     </g>
                                   );
@@ -793,17 +877,25 @@ export default function App() {
                                       strokeWidth="1"
                                       className="animate-pulse opacity-60"
                                     />
+                                    {/* Transparent hit area */}
+                                    <circle
+                                      cx={`${x}%`}
+                                      cy={y}
+                                      r="15"
+                                      fill="transparent"
+                                      className="cursor-pointer outline-none"
+                                      onMouseEnter={() => setHoveredPt({ ...pt, idx })}
+                                      onMouseLeave={() => setHoveredPt(null)}
+                                    />
                                     {/* Core circle */}
                                     <circle
                                       cx={`${x}%`}
                                       cy={y}
-                                      r="4"
+                                      r={hoveredPt?.idx === idx ? 6 : 4}
                                       fill={color}
                                       stroke="#ffffff"
                                       strokeWidth="1.5"
-                                      className="cursor-pointer hover:scale-125 transition-transform"
-                                      onMouseEnter={() => setHoveredPt({ ...pt, idx })}
-                                      onMouseLeave={() => setHoveredPt(null)}
+                                      className="pointer-events-none transition-all duration-200"
                                     />
                                     {/* Floating micro indicators labels */}
                                     <text

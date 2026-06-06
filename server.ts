@@ -3,6 +3,8 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import cookieParser from "cookie-parser";
+import jwt from "jsonwebtoken";
 import {
   dbInit,
   getCategories,
@@ -23,11 +25,97 @@ async function startServer() {
   dbInit();
 
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.CUSTOM_PORT || "3000", 10);
 
   // Set limits to handle large bank statement PDF base64 payloads
   app.use(express.json({ limit: "20mb" }));
   app.use(express.urlencoded({ limit: "20mb", extended: true }));
+  app.use(cookieParser());
+
+  // Google OAuth Endpoints
+  app.get("/api/auth/url", (req, res) => {
+    const redirectUri = `${req.protocol}://${req.get("x-forwarded-host") || req.get("host")}/auth/callback`;
+    const params = new URLSearchParams({
+      client_id: process.env.GOOGLE_CLIENT_ID || "",
+      redirect_uri: redirectUri,
+      response_type: "code",
+      scope: "openid email profile",
+      access_type: "offline",
+      prompt: "consent"
+    });
+    res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}` });
+  });
+
+  app.get(["/auth/callback", "/auth/callback/"], async (req, res) => {
+    const { code } = req.query;
+    const redirectUri = `${req.protocol}://${req.get("x-forwarded-host") || req.get("host")}/auth/callback`;
+
+    try {
+      const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code: code as string,
+          client_id: process.env.GOOGLE_CLIENT_ID || "",
+          client_secret: process.env.GOOGLE_CLIENT_SECRET || "",
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }),
+      });
+
+      const tokens = await tokenResponse.json();
+
+      if (tokens.id_token) {
+        // Just decode for basic test/demo, no strict verification here
+        const decoded = jwt.decode(tokens.id_token);
+        res.cookie("auth_session", tokens.id_token, {
+          secure: true,
+          sameSite: "none",
+          httpOnly: true,
+        });
+
+        // Send success message to parent window and close popup
+        return res.send(`
+          <html>
+            <body>
+              <script>
+                if (window.opener) {
+                  window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', user: ${JSON.stringify(decoded)} }, '*');
+                  window.close();
+                } else {
+                  window.location.href = '/';
+                }
+              </script>
+              <p>Authentication successful. This window should close automatically.</p>
+            </body>
+          </html>
+        `);
+      }
+    } catch (err) {
+      console.error("OAuth token exchange error:", err);
+    }
+    res.status(500).send("Authentication failed");
+  });
+
+  app.get("/api/auth/me", (req, res) => {
+    try {
+      const token = req.cookies.auth_session;
+      if (!token) return res.json({ user: null });
+      const decoded = jwt.decode(token);
+      res.json({ user: decoded });
+    } catch (err) {
+      res.json({ user: null });
+    }
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    res.clearCookie("auth_session", {
+      secure: true,
+      sameSite: "none",
+      httpOnly: true,
+    });
+    res.json({ success: true });
+  });
 
   // API Check Status Endpoint
   app.get("/api/health", (req, res) => {

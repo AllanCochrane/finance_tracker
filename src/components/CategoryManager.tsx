@@ -37,10 +37,10 @@ export default function CategoryManager({ categories, onAddCategory, onDeleteCat
   };
 
   return (
-    <div id="category-manager-container" className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm space-y-6">
+    <div id="category-manager-container" className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm space-y-6 font-sans">
       <div className="flex items-center gap-2">
         <FolderEdit className="w-5 h-5 text-emerald-600" />
-        <h3 className="text-sm font-semibold text-gray-900">Categorization Rules</h3>
+        <h3 className="text-sm font-semibold text-gray-900 font-sans">Categorization Rules</h3>
       </div>
 
       {/* New Cat Form */}
