@@ -1,8 +1,13 @@
 import Database from "better-sqlite3";
 import path from "path";
+import fs from "fs";
 
 // Initialize SQLite database in the root folder context
 const dbPath = process.env.DB_PATH || path.join(process.cwd(), "expenses.db");
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
 const db = new Database(dbPath);
 
 export interface DbTransaction {
@@ -114,7 +119,7 @@ export function dbInit() {
 
   // Initial seed check for Transactions
   const txCount = db.prepare("SELECT COUNT(*) as count FROM transactions").get() as { count: number };
-  if (txCount.count === 0) {
+  if (txCount.count === 0 && process.env.SKIP_SEED_DATA !== "true") {
     console.log("Seeding demo transactions in SQLite database...");
     const insertTx = db.prepare(`
       INSERT INTO transactions (id, date, description, amount, type, category, source, confidence)
