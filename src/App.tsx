@@ -185,7 +185,7 @@ export default function App() {
       description: newTx.description.trim() || "Manual Transaction",
       amount: amtParsed,
       type: newTx.type,
-      category: newTx.type === "income" ? "Income" : newTx.category,
+      category: newTx.category,
       source: "manual",
     };
 
@@ -1182,12 +1182,11 @@ export default function App() {
                 <label className="text-[10px] font-bold text-gray-500 uppercase font-sans">Category Assignee</label>
                 <div className="flex gap-1.5">
                   <select
-                    className="flex-1 text-xs rounded-lg border-gray-200 bg-white p-2.5 shadow-sm disabled:opacity-50"
+                    className="flex-1 text-xs rounded-lg border-gray-200 bg-white p-2.5 shadow-sm"
                     value={newTx.category}
                     onChange={(e) => setNewTx({ ...newTx, category: e.target.value })}
-                    disabled={newTx.type === "income"}
                   >
-                    {categories.filter((c) => c.name !== "Income").map((c) => (
+                    {categories.map((c) => (
                       <option key={c.id} value={c.name}>{c.name}</option>
                     ))}
                   </select>
@@ -1329,16 +1328,11 @@ export default function App() {
                               <select
                                 className="bg-transparent border-0 cursor-pointer p-0.5 text-xs text-gray-700 font-semibold focus:ring-0 focus:border-0 hover:bg-gray-50 rounded"
                                 value={tx.category}
-                                disabled={tx.type === "income"}
                                 onChange={(e) => handleUpdateTransactionCategory(tx.id, e.target.value)}
                               >
-                                {tx.type === "income" ? (
-                                  <option value="Income">Salary Paycheck</option>
-                                ) : (
-                                  categories.filter(c => c.name !== "Income").map((cat) => (
-                                    <option key={cat.id} value={cat.name}>{cat.name}</option>
-                                  ))
-                                )}
+                                {categories.map((cat) => (
+                                  <option key={cat.id} value={cat.name}>{cat.name}</option>
+                                ))}
                               </select>
                             </div>
                           </td>
