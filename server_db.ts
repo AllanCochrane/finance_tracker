@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 
 // Initialize SQLite database in the root folder context
-const dbPath = path.join(process.cwd(), "expenses.db");
+const dbPath = process.env.DB_PATH || path.join(process.cwd(), "expenses.db");
 const db = new Database(dbPath);
 
 export interface DbTransaction {

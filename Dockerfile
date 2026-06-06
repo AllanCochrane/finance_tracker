@@ -4,9 +4,7 @@ WORKDIR /app
 
 # Install dependencies 
 COPY package*.json ./
-# Pre-built binaries are usually available for native modules like better-sqlite3 on standard platforms.
-# If you encounter build errors on unusual architectures, you may need to uncomment the following line:
-# RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+# Pre-built binaries are available for native modules like better-sqlite3 on ARM64.
 RUN npm ci
 
 # Copy the rest of the application source code
